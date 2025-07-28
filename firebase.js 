@@ -1,0 +1,192 @@
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInWithEmailAndPassword, signOut } from 'firebase/auth';
+import { getDatabase, ref, push, set, get, remove, update } from 'firebase/database';
+
+const firebaseConfig = {
+  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+  databaseURL: process.env.NEXT_PUBLIC_FIREBASE_DATABASE_URL,
+  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID
+};
+
+const app = initializeApp(firebaseConfig);
+export const auth = getAuth(app);
+export const database = getDatabase(app);
+
+// Utility functions
+export const createSlug = (title) => {
+  return title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+};
+
+export const getEmbedUrl = (videoUrl) => {
+  if (videoUrl.includes('youtube.com') || videoUrl.includes('youtu.be')) {
+    const videoId = videoUrl.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([^&\n?#]+)/);
+    return videoId ? `https://www.youtube.com/embed/${videoId[1]}?autoplay=1&rel=0` : videoUrl;
+  }
+  
+  if (videoUrl.includes('dailymotion.com')) {
+    const videoId = videoUrl.match(/dailymotion\.com\/video\/([^&\n?#]+)/);
+    return videoId ? `https://geo.dailymotion.com/player.html?video=${videoId[1]}&autoplay=1&endscreen-enable=false` : videoUrl;
+  }
+  
+  return videoUrl;
+};
+
+export const getThumbnail = (videoUrl) => {
+  if (videoUrl.includes('youtube.com') || videoUrl.includes('youtu.be')) {
+    const videoId = videoUrl.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([^&\n?#]+)/);
+    return videoId ? `https://img.youtube.com/vi/${videoId[1]}/maxresdefault.jpg` : 'https://via.placeholder.com/320x180?text=Video';
+  }
+  
+  if (videoUrl.includes('dailymotion.com')) {
+    const videoId = videoUrl.match(/dailymotion\.com\/video\/([^&\n?#]+)/);
+    return videoId ? `https://www.dailymotion.com/thumbnail/video/${videoId[1]}` : 'https://via.placeholder.com/320x180?text=Video';
+  }
+  
+  return 'https://via.placeholder.com/320x180?text=Video';
+};
+
+// Database functions
+export const getAllVideos = async () => {
+  try {
+    const snapshot = await get(ref(database, 'videos'));
+    if (snapshot.exists()) {
+      const videos = [];
+      snapshot.forEach((child) => {
+        videos.push({
+          id: child.key,
+          ...child.val()
+        });
+      });
+      return videos.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    }
+    return [];
+  } catch (error) {
+    console.error('Error getting videos:', error);
+    return [];
+  }
+};
+
+export const getVideoBySlug = async (slug) => {
+  try {
+    const videos = await getAllVideos();
+    return videos.find(video => video.slug === slug) || null;
+  } catch (error) {
+    console.error('Error getting video by slug:', error);
+    return null;
+  }
+};
+
+export const getVideosByCategory = async (category) => {
+  try {
+    const videos = await getAllVideos();
+    return videos.filter(video => video.category === category);
+  } catch (error) {
+    console.error('Error getting videos by category:', error);
+    return [];
+  }
+};
+
+export const addVideo = async (videoData) => {
+  try {
+    const newVideoRef = push(ref(database, 'videos'));
+    const video = {
+      title: videoData.title,
+      description: videoData.description || '',
+      category: videoData.category,
+      tags: videoData.tags || '',
+      videoUrl: videoData.videoUrl,
+      embedUrl: getEmbedUrl(videoData.videoUrl),
+      thumbnail: videoData.thumbnail || getThumbnail(videoData.videoUrl),
+      slug: createSlug(videoData.title),
+      adCode: videoData.adCode || '',
+      views: 0,
+      status: 'published',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    
+    await set(newVideoRef, video);
+    return { success: true, id: newVideoRef.key };
+  } catch (error) {
+    console.error('Error adding video:', error);
+    return { success: false, error: error.message };
+  }
+};
+
+export const updateVideo = async (id, videoData) => {
+  try {
+    const updates = {
+      title: videoData.title,
+      description: videoData.description || '',
+      category: videoData.category,
+      tags: videoData.tags || '',
+      videoUrl: videoData.videoUrl,
+      embedUrl: getEmbedUrl(videoData.videoUrl),
+      thumbnail: videoData.thumbnail || getThumbnail(videoData.videoUrl),
+      slug: createSlug(videoData.title),
+      adCode: videoData.adCode || '',
+      updatedAt: new Date().toISOString()
+    };
+    
+    await update(ref(database, `videos/${id}`), updates);
+    return { success: true };
+  } catch (error) {
+    console.error('Error updating video:', error);
+    return { success: false, error: error.message };
+  }
+};
+
+export const deleteVideo = async (id) => {
+  try {
+    await remove(ref(database, `videos/${id}`));
+    return { success: true };
+  } catch (error) {
+    console.error('Error deleting video:', error);
+    return { success: false, error: error.message };
+  }
+};
+
+export const incrementViews = async (id) => {
+  try {
+    const videoRef = ref(database, `videos/${id}`);
+    const snapshot = await get(videoRef);
+    if (snapshot.exists()) {
+      const currentViews = snapshot.val().views || 0;
+      await update(videoRef, { views: currentViews + 1 });
+    }
+  } catch (error) {
+    console.error('Error incrementing views:', error);
+  }
+};
+
+// Authentication functions
+export const adminLogin = async (email, password) => {
+  try {
+    const userCredential = await signInWithEmailAndPassword(auth, email, password);
+    return { success: true, user: userCredential.user };
+  } catch (error) {
+    console.error('Login error:', error);
+    return { success: false, error: error.message };
+  }
+};
+
+export const adminLogout = async () => {
+  try {
+    await signOut(auth);
+    return { success: true };
+  } catch (error) {
+    console.error('Logout error:', error);
+    return { success: false, error: error.message };
+  }
+};
+
+export const categories = [
+  'Romantic Vibes', 'Fashion Queens', 'Dance Reels', 'Beauty & Makeup',
+  'Aesthetic Life', 'Travel Diaries', 'Cute Moments', 'DIY & Crafts',
+  'Comedy Clips', 'Life Hacks'
+];
+1
